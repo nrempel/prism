@@ -6963,6 +6963,31 @@ pm_statements_node_create(pm_parser_t *parser) {
 }
 
 /**
+ * Allocate and initialize a new TypedAssignmentNode node.
+ */
+pm_typed_assignment_node_t *
+pm_typed_assignment_node_create(pm_parser_t *parser, pm_node_t *target, pm_constant_id_t type, pm_token_t *operator_token, pm_node_t *value) {
+    pm_typed_assignment_node_t *node = PM_NODE_ALLOC(parser, pm_typed_assignment_node_t);
+
+    *node = (pm_typed_assignment_node_t){
+        {
+            .type = PM_TYPED_ASSIGNMENT_NODE,
+            .node_id = PM_NODE_IDENTIFY(parser),
+            .location = {
+                .start = target->location.start,
+                .end = value->location.end
+            }
+        },
+        .target = (pm_local_variable_target_node_t *)target,
+        .type_annotation = type, 
+        .operator_loc = PM_LOCATION_TOKEN_VALUE(operator_token),
+        .value = value
+    };
+
+    return node;
+}
+
+/**
  * Get the length of the given StatementsNode node's body.
  */
 static size_t
@@ -11527,27 +11552,56 @@ parser_lex(pm_parser_t *parser) {
                 // :: symbol
                 case ':':
                     if (match(parser, ':')) {
+                        // Handle '::' operator
                         if (lex_state_beg_p(parser) || lex_state_p(parser, PM_LEX_STATE_CLASS) || (lex_state_p(parser, PM_LEX_STATE_ARG_ANY) && space_seen)) {
                             lex_state_set(parser, PM_LEX_STATE_BEG);
                             LEX(PM_TOKEN_UCOLON_COLON);
+                        } else {
+                            lex_state_set(parser, PM_LEX_STATE_DOT);
+                            LEX(PM_TOKEN_COLON_COLON);
                         }
-
-                        lex_state_set(parser, PM_LEX_STATE_DOT);
-                        LEX(PM_TOKEN_COLON_COLON);
+                        break;
                     }
 
+                    // *** Adjusted code to handle type annotation with optional whitespace ***
+
+                    const uint8_t *pos = parser->current.end; // Start after ':'
+
+                    // Skip whitespace after ':'
+                    while (pos < parser->end && pm_char_is_whitespace(*pos)) {
+                        pos++;
+                    }
+
+                    // Check if the next character starts an identifier
+                    if (char_is_identifier_start(parser, pos)) {
+                        
+                        // Move parser's current end to the position after whitespace
+                        parser->current.end = pos;
+
+                        lex_state_set(parser, PM_LEX_STATE_BEG);
+                        LEX(PM_TOKEN_TYPE_ANNOTATION);
+                        break;
+                    }
+                    
+
+                    // Handle standalone ':'
                     if (lex_state_end_p(parser) || pm_char_is_whitespace(peek(parser)) || peek(parser) == '#') {
                         lex_state_set(parser, PM_LEX_STATE_BEG);
                         LEX(PM_TOKEN_COLON);
+                        break;
                     }
 
+                    // Handle symbol literals like : "string" or : 'string'
                     if (peek(parser) == '"' || peek(parser) == '\'') {
                         lex_mode_push_string(parser, peek(parser) == '"', false, '\0', *parser->current.end);
                         parser->current.end++;
+                        break;
                     }
 
+                    // Default handling for symbols
                     lex_state_set(parser, PM_LEX_STATE_FNAME);
                     LEX(PM_TOKEN_SYMBOL_BEGIN);
+                    break;
 
                 // / /=
                 case '/':
@@ -12904,6 +12958,7 @@ typedef enum {
     PM_BINDING_POWER_DEFINED =          14, // defined?
     PM_BINDING_POWER_MULTI_ASSIGNMENT = 16, // =
     PM_BINDING_POWER_ASSIGNMENT =       18, // = += -= *= /= %= &= |= ^= &&= ||= <<= >>= **=
+    PM_BINDING_POWER_TYPE_ANNOTATION =  19, // ':' for type annotations 
     PM_BINDING_POWER_TERNARY =          20, // ?:
     PM_BINDING_POWER_RANGE =            22, // .. ...
     PM_BINDING_POWER_LOGICAL_OR =       24, // ||
@@ -13053,7 +13108,10 @@ pm_binding_powers_t pm_binding_powers[PM_TOKEN_MAXIMUM] = {
     // :: . &.
     [PM_TOKEN_COLON_COLON] = RIGHT_ASSOCIATIVE(PM_BINDING_POWER_CALL),
     [PM_TOKEN_DOT] = RIGHT_ASSOCIATIVE(PM_BINDING_POWER_CALL),
-    [PM_TOKEN_AMPERSAND_DOT] = RIGHT_ASSOCIATIVE(PM_BINDING_POWER_CALL)
+    [PM_TOKEN_AMPERSAND_DOT] = RIGHT_ASSOCIATIVE(PM_BINDING_POWER_CALL),
+    
+    // : (type annotation)
+    [PM_TOKEN_TYPE_ANNOTATION] = LEFT_ASSOCIATIVE(PM_BINDING_POWER_TYPE_ANNOTATION),
 };
 
 #undef BINDING_POWER_ASSIGNMENT
@@ -18012,6 +18070,39 @@ parse_regular_expression_errors(pm_parser_t *parser, pm_regular_expression_node_
 static inline pm_node_t *
 parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, bool accepts_command_call, bool accepts_label, pm_diagnostic_id_t diag_id, uint16_t depth) {
     switch (parser->current.type) {
+        case PM_TOKEN_IDENTIFIER: {
+            pm_token_t identifier_token = parser->current;
+            parser_lex(parser); // Move past the identifier
+
+            // Lookahead to check if this is an assignment target
+            if (parser->current.type == PM_TOKEN_TYPE_ANNOTATION ||
+                parser->current.type == PM_TOKEN_EQUAL /* Add other assignment operators if necessary */) {
+
+                // Get the location of the identifier
+                pm_location_t location = PM_LOCATION_TOKEN_VALUE(&identifier_token);
+
+                // Get the constant ID for the variable name
+                pm_constant_id_t name_id = pm_parser_constant_id_token(parser, &identifier_token);
+
+                // Determine the depth (assuming current scope is depth 0)
+                uint32_t variable_depth = 0;
+
+                // Calculate the length of the identifier
+                size_t length = (size_t)(identifier_token.end - identifier_token.start);
+
+                // Add the local variable to the parser's context
+                pm_parser_local_add_constant(parser, (const char *)identifier_token.start, length);
+
+                // Create a local variable target node
+                return (pm_node_t *)pm_local_variable_target_node_create(
+                    parser,
+                    &location,
+                    name_id,
+                    variable_depth
+                );
+                
+            }
+        }
         case PM_TOKEN_BRACKET_LEFT_ARRAY: {
             parser_lex(parser);
 
@@ -18485,7 +18576,6 @@ parse_expression_prefix(pm_parser_t *parser, pm_binding_power_t binding_power, b
 
             return node;
         }
-        case PM_TOKEN_IDENTIFIER:
         case PM_TOKEN_METHOD_NAME: {
             parser_lex(parser);
             pm_token_t identifier = parser->previous;
@@ -20935,6 +21025,54 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
     pm_token_t token = parser->current;
 
     switch (token.type) {
+        case PM_TOKEN_TYPE_ANNOTATION: {
+            parser_lex(parser); // Move past ':'
+
+            // Parse the type annotation (expecting a constant like 'Int')
+            pm_constant_id_t type_constant_id = 0;
+            if (parser->current.type == PM_TOKEN_CONSTANT) {
+                // Get the constant ID representing the type name
+                type_constant_id = pm_parser_constant_id_token(parser, &parser->current);
+                parser_lex(parser); // Move past the type name
+            } else {
+                // Handle error: Expected a type name
+                pm_parser_err_token(parser, &parser->current, PM_ERR_EXPECT_TYPE_NAME);
+                type_constant_id = 0; // TODO: figure out how to register error
+            }
+
+            // Check if the next token is '=', indicating an assignment
+            if (parser->current.type == PM_TOKEN_EQUAL) {
+                pm_token_t equal_token = parser->current;
+                parser_lex(parser); // Move past '='
+
+                // Ensure the target is a local variable target node
+                if (node->type != PM_LOCAL_VARIABLE_TARGET_NODE) {
+                    pm_parser_err_node(parser, node, PM_ERR_INVALID_ASSIGNMENT_TARGET);
+                    // Recover by creating a missing node
+                    node = (pm_node_t *)pm_missing_node_create(parser, node->location.start, node->location.end);
+                }
+
+                // Parse the value being assigned
+                pm_node_t *value = parse_expression(parser, PM_BINDING_POWER_ASSIGNMENT + 1,
+                                                    accepts_command_call, false,
+                                                    PM_ERR_EXPECT_EXPRESSION_AFTER_EQUAL, depth + 1);
+
+                // Create a typed assignment node
+                pm_typed_assignment_node_t *typed_assignment_node = pm_typed_assignment_node_create(
+                    parser,
+                    node,                        // Target variable (now validated)
+                    type_constant_id,            // Type annotation as constant ID
+                    &equal_token,                // '=' operator location
+                    value                        // Value being assigned
+                );
+
+                return (pm_node_t *)typed_assignment_node;
+            } else {
+                // Handle error: Expected '=' after type annotation
+                pm_parser_err_token(parser, &parser->current, PM_ERR_EXPECT_EQUAL_AFTER_TYPE_ANNOTATION);
+                return (pm_node_t *)pm_missing_node_create(parser, parser->current.start, parser->current.end);
+            }
+        }
         case PM_TOKEN_EQUAL: {
             switch (PM_NODE_TYPE(node)) {
                 case PM_CALL_NODE: {
@@ -21649,6 +21787,9 @@ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t 
                 case PM_TOKEN_CONSTANT: {
                     parser_lex(parser);
                     pm_node_t *path;
+
+                    path = (pm_node_t *) pm_constant_path_node_create(parser, node, &delimiter, &parser->previous);
+                    printf("path type: %d\n", PM_NODE_TYPE(path));
 
                     if (
                         (parser->current.type == PM_TOKEN_PARENTHESIS_LEFT) ||

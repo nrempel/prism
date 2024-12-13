@@ -400,7 +400,10 @@ static const pm_diagnostic_data_t diagnostic_messages[PM_DIAGNOSTIC_ID_MAX] = {
     [PM_WARN_UNEXPECTED_CARRIAGE_RETURN]        = { "encountered \\r in middle of line, treated as a mere space", PM_WARNING_LEVEL_DEFAULT },
     [PM_WARN_UNREACHABLE_STATEMENT]             = { "statement not reached", PM_WARNING_LEVEL_VERBOSE },
     [PM_WARN_UNUSED_LOCAL_VARIABLE]             = { "assigned but unused variable - %.*s", PM_WARNING_LEVEL_VERBOSE },
-    [PM_WARN_VOID_STATEMENT]                    = { "possibly useless use of %.*s in void context", PM_WARNING_LEVEL_VERBOSE }
+    [PM_WARN_VOID_STATEMENT]                    = { "possibly useless use of %.*s in void context", PM_WARNING_LEVEL_VERBOSE },
+    [PM_ERR_EXPECT_TYPE_NAME]                   = { "expected a type name", PM_ERROR_LEVEL_SYNTAX },
+    [PM_ERR_EXPECT_EQUAL_AFTER_TYPE_ANNOTATION] = { "expected an '=' after the type annotation", PM_ERROR_LEVEL_SYNTAX },
+    [PM_ERR_INVALID_ASSIGNMENT_TARGET]          = { "expected a local variable target node", PM_ERROR_LEVEL_SYNTAX }
 };
 
 /**

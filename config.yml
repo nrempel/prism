@@ -288,6 +288,9 @@ errors:
   - WRITE_TARGET_READONLY
   - WRITE_TARGET_UNEXPECTED
   - XSTRING_TERM
+  - EXPECT_TYPE_NAME
+  - EXPECT_EQUAL_AFTER_TYPE_ANNOTATION
+  - INVALID_ASSIGNMENT_TARGET
 warnings:
   - AMBIGUOUS_BINARY_OPERATOR
   - AMBIGUOUS_FIRST_ARGUMENT_MINUS
@@ -649,6 +652,15 @@ tokens:
     comment: "a separator between words in a list"
   - name: __END__
     comment: "marker for the point in the file at which the parser should stop"
+  - name: TYPE_ANNOTATION
+    value: null
+    comment: |
+      The colon `:` used for type annotations in assignments.
+
+      Example:
+
+          x:Int = 1
+            ^
 flags:
   - name: ArgumentsNodeFlags
     values:
@@ -4475,3 +4487,45 @@ nodes:
 
           yield 1
           ^^^^^^^
+  - name: TypedAssignmentNode
+    fields:
+      - name: target
+        type: node
+        kind: LocalVariableTargetNode
+        comment: |
+          The target of the assignment. This is the variable being assigned to.
+
+            x:Int = 1
+            ^
+
+      - name: type_annotation
+        type: constant
+        kind: Node
+        comment: |
+          The type annotation for the assignment.
+
+            x:Int = 1
+              ^^^
+
+      - name: operator_loc
+        type: location
+        comment: |
+          The location of the `=` operator.
+
+            x:Int = 1
+                 ^
+
+      - name: value
+        type: node
+        kind: non-void expression
+        comment: |
+          The value being assigned.
+
+            x:Int = 1
+                 ^
+
+    comment: |
+      Represents an assignment with a type annotation.
+
+        x:Int = 1
+        ^^^^^^^^^
